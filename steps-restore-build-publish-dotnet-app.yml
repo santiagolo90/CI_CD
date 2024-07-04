@@ -1,0 +1,54 @@
+parameters:
+- name: 'Project'
+  type: string  
+- name: AlreadyRestored 
+  type: boolean 
+  default: false
+- name: PublishBuildArtifacts
+  type: boolean
+  default: true
+- name: netCoreTargetVersion
+  type: string
+  default: 'net8.0'
+- name: BuildConfiguration
+  type: string
+  default: 'Release'
+
+steps:
+# Restore project
+- ${{ if eq(parameters.AlreadyRestored, false) }}:    
+  - task: NuGetAuthenticate@1
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Restore ${{parameters.Project}}'
+    retryCountOnTaskFailure: 3
+    inputs:
+      command: 'custom'
+      custom: 'restore'        
+      projects: '**/${{parameters.Project}}.csproj'
+
+# Build project
+- task: DotNetCoreCLI@2
+  displayName: 'DotNet Build ${{parameters.Project}}'
+  inputs:
+    command: 'build'
+    projects: '**/${{parameters.Project}}.csproj'
+    arguments: '--configuration ${{parameters.BuildConfiguration}} --no-restore'
+
+# Publish Artifact
+- ${{ if eq(parameters.PublishBuildArtifacts, true) }}:
+    - task: DotNetCoreCLI@2
+      displayName: 'DotNet Publish ${{parameters.Project}}'
+      inputs:
+        command: 'publish'
+        projects: '**/${{parameters.Project}}.csproj'
+        publishWebProjects: false
+        arguments: '--configuration ${{parameters.BuildConfiguration}} --output $(Build.StagingDirectory)/${{parameters.BuildConfiguration}} --no-build'
+        zipAfterPublish: True
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Build Artifacts'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'

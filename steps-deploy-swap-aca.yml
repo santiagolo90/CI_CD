@@ -1,0 +1,53 @@
+parameters:
+- name: azureSubscription  
+  type: string    
+- name: acrName
+  type: string
+- name: imageName
+  type: string
+- name: containerAppName
+  type: string
+- name: resourceGroup
+  type: string
+
+steps:
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: '${{parameters.azureSubscription}}'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      # Autenticación en el Azure Container Registry
+      az acr login --name ${{parameters.acrName}}
+      
+      # Obtener el ID de la revisión actual
+      CURRENT_REVISION=$(az containerapp revision list --name ${{parameters.containerAppName}} --resource-group ${{parameters.resourceGroup}} --query "[?properties.active==\`true\`].{name:name}" --output tsv)
+      
+      # Verificar si hay una revisión activa
+      if [[ -z "$CURRENT_REVISION" ]]; then
+        echo "No hay ninguna revisión activa para desactivar."
+      else
+        #Deactivate
+        echo "##[command]Deactivate rev Command-line being run: az containerapp revision list -n ${{parameters.containerAppName}} -g ${{parameters.resourceGroup}} | jq -rc '.[] | .name' | grep -Fv CURRENT_REVISION | xargs -I {} az containerapp revision deactivate --revision {} -g ${{parameters.resourceGroup}}"
+        az containerapp revision list -n ${{parameters.containerAppName}} -g ${{parameters.resourceGroup}} | jq -rc '.[] | .name' | grep -Fv CURRENT_REVISION | xargs -I {} az containerapp revision deactivate --revision {} -g ${{parameters.resourceGroup}}
+      fi
+      
+      # Desplegar la nueva imagen
+      az containerapp update \
+        --name ${{parameters.containerAppName}} \
+        --resource-group ${{parameters.resourceGroup}} \
+        --image ${{parameters.acrName}}.azurecr.io/${{parameters.imageName}}:$(Build.BuildId)
+      
+      # Esperar a que la nueva revisión esté activa
+      NEW_REVISION=$(az containerapp revision list --name ${{parameters.containerAppName}} --resource-group ${{parameters.resourceGroup}} --query "[?properties.active==\`true\`].{name:name}" --output tsv)
+      while [[ "$NEW_REVISION" == "$CURRENT_REVISION" ]]; do
+        sleep 10
+        NEW_REVISION=$(az containerapp revision list --name ${{parameters.containerAppName}} --resource-group ${{parameters.resourceGroup}} --query "[?properties.active==\`true\`].{name:name}" --output tsv)
+      done
+      #Swap traffic
+      echo "##[command]Swap Command-line being run: az containerapp ingress traffic set -n ${{parameters.containerAppName}} -g ${{parameters.resourceGroup}}  --revision-weight $NEW_REVISION=100"
+      az containerapp ingress traffic set --name ${{parameters.containerAppName}} -g ${{parameters.resourceGroup}}  --revision-weight $NEW_REVISION=100
+      echo "Despliegue completado exitosamente con la nueva revision: $NEW_REVISION"
+      # Obtener y registrar la URL de la nueva revisión
+      NEW_REVISION_URL=$(az containerapp revision show --name ${{parameters.containerAppName}} --resource-group ${{parameters.resourceGroup}} --revision $NEW_REVISION --query "properties.configuration.ingress.fqdn" --output tsv)
+      echo "La URL de la nueva revisión es: http://$NEW_REVISION_URL"
